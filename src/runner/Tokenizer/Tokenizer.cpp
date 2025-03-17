@@ -13,6 +13,7 @@
 #include "sample_log.h"
 #include "string_utility.hpp"
 #include "memory_utils.hpp"
+#include "http_utils.hpp"
 
 // class TokenizerLLaMa : public BaseTokenizer
 // {
@@ -321,6 +322,17 @@ private:
 public:
     bool Init(std::string model_path = "http://localhost:8080", bool b_bos = true, bool b_eos = false) override
     {
+        base_url = model_path;
+        if (!test_connect_http(base_url, 10))
+        {
+            ALOGE("connect %s failed", base_url.c_str());
+            return false;
+        }
+        else
+        {
+            ALOGI("connect %s ok", base_url.c_str());
+        }
+
         base_url = model_path;
         try
         {

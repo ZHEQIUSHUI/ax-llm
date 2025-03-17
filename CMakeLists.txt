@@ -70,14 +70,14 @@ function(build_exec name main_source)
                     # src/runner/Tokenizer/QwenTokenizer.cpp
                     )
 
-    target_link_libraries(${name} ax_engine ax_interpreter ax_sys)
+    target_link_libraries(${name} ax_engine ax_interpreter ax_sys pthread)
     # target_link_libraries(${name} sentencepiece re2::re2)
     target_link_libraries(${name} ${OpenCV_LIBS})
     install(TARGETS ${name} DESTINATION bin)
 endfunction()
 
 build_exec(main src/main.cpp)
-# build_exec(main_qwen src/main_qwen.cpp)
+build_exec(main_http src/main_http.cpp)
 
 file(GLOB RUN_SCRIPT "${CMAKE_SOURCE_DIR}/scripts/*.py" "${CMAKE_SOURCE_DIR}/scripts/*.sh")
 install(FILES ${RUN_SCRIPT} DESTINATION bin/)

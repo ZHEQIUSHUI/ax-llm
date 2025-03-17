@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>爱芯机器人</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Roboto', sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #f5f5f5;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .container {
+      background: white;
+      max-width: 800px;
+      width: 100%;
+      margin-top: 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    header {
+      background: #4CAF50;
+      color: white;
+      padding: 16px;
+      text-align: center;
+    }
+    .config {
+      padding: 16px;
+      background: #fafafa;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      align-items: center;
+    }
+    .config label {
+      font-weight: bold;
+    }
+    .config input {
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      outline: none;
+    }
+    .model-section {
+      padding: 16px;
+      background: #fafafa;
+      border-bottom: 1px solid #eee;
+    }
+    .model-section h2 {
+      margin-top: 0;
+    }
+    .model-section label {
+      font-weight: bold;
+    }
+    .model-section select, 
+    .model-section button, 
+    .model-section textarea {
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      outline: none;
+      margin-right: 8px;
+    }
+    .chat-area {
+      padding: 16px;
+      height: 400px;
+      overflow-y: auto;
+      background: #fff;
+    }
+    .message {
+      margin-bottom: 12px;
+      padding: 8px;
+      border-radius: 4px;
+      max-width: 70%;
+      word-break: break-word;
+    }
+    .message.user {
+      background: #e0f7fa;
+      align-self: flex-end;
+      text-align: right;
+    }
+    .message.bot {
+      background: #f1f8e9;
+      align-self: flex-start;
+      text-align: left;
+    }
+    .input-area {
+      padding: 16px;
+      border-top: 1px solid #eee;
+      display: flex;
+      align-items: center;
+    }
+    .input-area input[type="text"] {
+      flex: 1;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      margin-right: 8px;
+    }
+    .input-area button {
+      padding: 10px 20px;
+      border: none;
+      background: #4CAF50;
+      color: white;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .params {
+      padding: 16px;
+      background: #fafafa;
+      border-top: 1px solid #eee;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+    .params .param {
+      flex: 1 1 200px;
+      display: flex;
+      flex-direction: column;
+    }
+    .params .param label {
+      margin-bottom: 4px;
+      font-weight: bold;
+    }
+    .params .param input {
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      outline: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>爱芯机器人</h1>
+    </header>
+    <div class="config">
+      <div>
+        <label for="server-url">服务器地址:</label>
+        <input type="text" id="server-url" value="http://10.126.33.245:8000" style="width:250px;">
+      </div>
+    </div>
+    <div class="model-section">
+      <h2>模型管理</h2>
+      <div style="margin-bottom: 8px;">
+        <label for="model-select">选择模型:</label>
+        <select id="model-select"></select>
+        <button id="load-model-btn">加载模型</button>
+        <button id="refresh-models-btn">刷新模型列表</button>
+      </div>
+      <div>
+        <label for="load-result">加载结果:</label><br>
+        <textarea id="load-result" style="width:100%; height:100px;"></textarea>
+      </div>
+    </div>
+    <div class="chat-area" id="chat-log">
+      <!-- 聊天记录显示区域 -->
+    </div>
+    <div class="input-area">
+      <input type="text" id="chat-input" placeholder="输入消息...">
+      <button id="send-btn">发送</button>
+    </div>
+    <div class="params">
+      <div class="param">
+        <label for="temperature">Temperature:</label>
+        <input type="number" id="temperature" step="0.1" value="0.7">
+      </div>
+      <div class="param">
+        <label for="repetition_penalty">Repetition Penalty:</label>
+        <input type="number" id="repetition_penalty" step="0.1" value="1.0">
+      </div>
+      <div class="param">
+        <label for="topk">Top-k:</label>
+        <input type="number" id="topk" value="40">
+      </div>
+      <div class="param">
+        <label for="topp">Top-p:</label>
+        <input type="number" id="topp" step="0.1" value="0.0">
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const chatLog = document.getElementById('chat-log');
+    const chatInput = document.getElementById('chat-input');
+    const sendBtn = document.getElementById('send-btn');
+    const serverUrlInput = document.getElementById('server-url');
+    
+    // 参数输入框
+    const temperatureInput = document.getElementById('temperature');
+    const repetitionPenaltyInput = document.getElementById('repetition_penalty');
+    const topkInput = document.getElementById('topk');
+    const toppInput = document.getElementById('topp');
+
+    // 模型管理部分
+    const modelSelect = document.getElementById('model-select');
+    const loadModelBtn = document.getElementById('load-model-btn');
+    const refreshModelsBtn = document.getElementById('refresh-models-btn');
+    const loadResult = document.getElementById('load-result');
+
+    // 添加消息到聊天记录
+    function appendMessage(sender, text) {
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message ' + sender;
+      messageDiv.textContent = sender === 'user' ? '你: ' + text : '机器人: ' + text;
+      chatLog.appendChild(messageDiv);
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
+    // 获取模型列表
+    function loadModels() {
+      const serverUrl = serverUrlInput.value.trim();
+	  loadResult.value = serverUrl;
+      fetch(serverUrl + '/api/tags')
+        .then(response => response.json())
+        .then(data => {
+          modelSelect.innerHTML = '';
+          if (data.models && Array.isArray(data.models)) {
+            data.models.forEach(modelObj => {
+              const option = document.createElement('option');
+              option.value = modelObj.name;
+              option.textContent = modelObj.name;
+              modelSelect.appendChild(option);
+            });
+          }
+        })
+        .catch(error => {
+          console.error('获取模型列表错误:', error);
+		  loadResult.value = '获取模型列表错误:'+ error;
+        });
+    }
+
+    // 页面加载时获取模型列表
+    window.addEventListener('load', loadModels);
+
+    // 刷新模型列表按钮点击事件
+    refreshModelsBtn.addEventListener('click', loadModels);
+
+    // 加载模型按钮点击事件
+    loadModelBtn.addEventListener('click', () => {
+      const serverUrl = serverUrlInput.value.trim();
+      const selectedModel = modelSelect.value;
+      fetch(serverUrl + '/api/load', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ model: selectedModel })
+      })
+      .then(response => response.text())
+      .then(rawMessage => {
+        loadResult.value = rawMessage;
+      })
+      .catch(error => {
+        console.error('加载模型错误:', error);
+        loadResult.value = '请求发生错误';
+      });
+    });
+
+    // 发送聊天消息
+    sendBtn.addEventListener('click', () => {
+      const message = chatInput.value.trim();
+	  const selectedModel = modelSelect.value;
+      if (!message) return;
+      appendMessage('user', message);
+      chatInput.value = '';
+
+      // 从参数输入框中获取参数值
+      const temperature = parseFloat(temperatureInput.value);
+      const repetition_penalty = parseFloat(repetitionPenaltyInput.value);
+      const topk = parseInt(topkInput.value, 10);
+      const topp = parseFloat(toppInput.value);
+      
+      // 获取服务器地址
+      const serverUrl = serverUrlInput.value.trim();
+      
+      // 构造 JSON 请求体
+      const requestBody = {
+        model: selectedModel,  // 可根据实际情况修改模型名称
+        messages: [{ role: 'user', content: message }],
+        temperature: temperature,
+        repetition_penalty: repetition_penalty,
+        'top-k': topk,
+        'top-p': topp
+      };
+
+      fetch(serverUrl + '/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestBody)
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.message) {
+          appendMessage('bot', data.message);
+        } else {
+          appendMessage('bot', '无响应或返回格式错误');
+        }
+      })
+      .catch(error => {
+        console.error('Error:', error);
+        appendMessage('bot', '请求发生错误');
+      });
+    });
+
+    // 支持回车键发送消息
+    chatInput.addEventListener('keypress', (event) => {
+      if (event.key === 'Enter') {
+        sendBtn.click();
+      }
+    });
+  </script>
+</body>
+</html>
