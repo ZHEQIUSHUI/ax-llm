@@ -16,7 +16,7 @@
 #include <axcl.h>
 #include <axcl_rt_memory.h>
 
-#define USE_SET_INPUT 1
+#define USE_SET_INPUT 0
 
 typedef void (*LLMRuningCallback)(int *p_token, int n_token, const char *p_str, float token_per_sec, void *reserve);
 
@@ -74,10 +74,10 @@ private:
 
     bool b_stop = false;
 
-#if USE_SET_INPUT
+    // #if USE_SET_INPUT
     unsigned int *p_indices_list;
     unsigned short *p_mask_list;
-#endif
+    // #endif
 
     LLMPostprocess postprocess;
     static int post_process(LLMPostprocess &postprocess, unsigned short *p, int n, std::vector<int> &history, float *val = 0)
@@ -200,6 +200,7 @@ public:
                 llama_layers[m + 1].layer.set_input(llama_layers[m + 1].layer.get_input("input").nIdx, layer.layer.get_output("output").phyAddr, layer.layer.get_output("output").nSize);
             }
         }
+#endif
         {
             bfloat16 bf16 = -65536.f;
             axclrtMalloc((void **)&p_indices_list, _attr.max_token_len * sizeof(unsigned int), axclrtMemMallocPolicy::AXCL_MEM_MALLOC_HUGE_FIRST);
@@ -222,7 +223,6 @@ public:
             axclrtMemcpy(p_indices_list, indices_list.data(), _attr.max_token_len * sizeof(unsigned int), AXCL_MEMCPY_HOST_TO_DEVICE);
             axclrtMemcpy(p_mask_list, tmp_mask_list.data(), tmp_mask_list.size() * sizeof(unsigned short), AXCL_MEMCPY_HOST_TO_DEVICE);
         }
-#endif
 
         if (!postprocess.load_config(attr.post_config_path))
         {
@@ -248,10 +248,10 @@ public:
         llama_post.release();
 
         embed_selector.Deinit();
-#if USE_SET_INPUT
+        // #if USE_SET_INPUT
         axclrtFree(p_indices_list);
         axclrtFree(p_mask_list);
-#endif
+        // #endif
         axclFinalize();
     }
 
@@ -311,6 +311,7 @@ public:
                 ALOGE("axclrtEngineCreateSequence failed");
                 return "";
             }
+            
             for (int m = 0; m < _attr.axmodel_num; m++)
             {
                 if (b_stop)
@@ -326,8 +327,19 @@ public:
                 // axclrtMemcpy((void *)layer.layer.get_input("mask").phyAddr, mask.size() * sizeof(unsigned short), mask.data(), mask.size() * sizeof(unsigned short), AXCL_MEMCPY_HOST_TO_DEVICE);
                 layer.layer.set_input(layer.layer.get_input("mask").nIdx, (unsigned long long)(p_mask_list + indices * (_attr.kv_cache_num + 1)), mask.size() * sizeof(unsigned short));
 #else
-                axclrtMemcpy((void *)layer.layer.get_input("indices").phyAddr, &indices, sizeof(indices), AXCL_MEMCPY_HOST_TO_DEVICE);
-                axclrtMemcpy((void *)layer.layer.get_input("mask").phyAddr, mask.data(), mask.size() * sizeof(unsigned short), AXCL_MEMCPY_HOST_TO_DEVICE);
+                // axclrtMemcpy((void *)layer.layer.get_input("indices").phyAddr, p_indices_list + indices, sizeof(indices), AXCL_MEMCPY_DEVICE_TO_DEVICE);
+                // axclrtMemcpy((void *)layer.layer.get_input("mask").phyAddr, p_mask_list + indices * (_attr.kv_cache_num + 1), mask.size() * sizeof(unsigned short), AXCL_MEMCPY_DEVICE_TO_DEVICE);
+
+                if (auto ret = axclrtEnginePushCopyTask(seq, (void *)layer.layer.get_input("indices").phyAddr, p_indices_list + indices, sizeof(indices), AXCL_MEMCPY_DEVICE_TO_DEVICE); ret != 0)
+                {
+                    ALOGE("axclrtEnginePushModelTask failed");
+                    return "";
+                }
+                if (auto ret = axclrtEnginePushCopyTask(seq, (void *)layer.layer.get_input("mask").phyAddr, p_mask_list + indices * (_attr.kv_cache_num + 1), mask.size() * sizeof(unsigned short), AXCL_MEMCPY_DEVICE_TO_DEVICE); ret != 0)
+                {
+                    ALOGE("axclrtEnginePushModelTask failed");
+                    return "";
+                }
 #endif
 
                 // if (m == 0)
@@ -352,15 +364,37 @@ public:
                     unsigned short *input_k_cache_ptr = (unsigned short *)layer.layer.get_input("K_cache").phyAddr;
                     unsigned short *input_v_cache_ptr = (unsigned short *)layer.layer.get_input("V_cache").phyAddr;
 
-                    axclrtMemcpy(input_k_cache_ptr + indices * _attr.kv_cache_size, (void *)layer.layer.get_output("K_cache_out").phyAddr, sizeof(unsigned short) * _attr.kv_cache_size, AXCL_MEMCPY_DEVICE_TO_DEVICE);
-                    axclrtMemcpy(input_v_cache_ptr + indices * _attr.kv_cache_size, (void *)layer.layer.get_output("V_cache_out").phyAddr, sizeof(unsigned short) * _attr.kv_cache_size, AXCL_MEMCPY_DEVICE_TO_DEVICE);
+                    // axclrtMemcpy(input_k_cache_ptr + indices * _attr.kv_cache_size, (void *)layer.layer.get_output("K_cache_out").phyAddr, sizeof(unsigned short) * _attr.kv_cache_size, AXCL_MEMCPY_DEVICE_TO_DEVICE);
+                    // axclrtMemcpy(input_v_cache_ptr + indices * _attr.kv_cache_size, (void *)layer.layer.get_output("V_cache_out").phyAddr, sizeof(unsigned short) * _attr.kv_cache_size, AXCL_MEMCPY_DEVICE_TO_DEVICE);
+
+                    if (auto ret = axclrtEnginePushCopyTask(seq, input_k_cache_ptr + indices * _attr.kv_cache_size, (void *)layer.layer.get_output("K_cache_out").phyAddr, sizeof(unsigned short) * _attr.kv_cache_size, AXCL_MEMCPY_DEVICE_TO_DEVICE); ret != 0)
+                    {
+                        ALOGE("axclrtEnginePushModelTask failed");
+                        return "";
+                    }
+                    if (auto ret = axclrtEnginePushCopyTask(seq, input_v_cache_ptr + indices * _attr.kv_cache_size, (void *)layer.layer.get_output("V_cache_out").phyAddr, sizeof(unsigned short) * _attr.kv_cache_size, AXCL_MEMCPY_DEVICE_TO_DEVICE); ret != 0)
+                    {
+                        ALOGE("axclrtEnginePushModelTask failed");
+                        return "";
+                    }
+
                     if (m == _attr.axmodel_num - 1)
-                        axclrtMemcpy((void *)llama_post.get_input("input").phyAddr,
-                                     (void *)layer.layer.get_output("output").phyAddr, llama_post.get_input("input").nSize, AXCL_MEMCPY_DEVICE_TO_DEVICE);
+                    {
+                        // axclrtMemcpy((void *)llama_post.get_input("input").phyAddr, (void *)layer.layer.get_output("output").phyAddr, llama_post.get_input("input").nSize, AXCL_MEMCPY_DEVICE_TO_DEVICE);
+                        if (auto ret = axclrtEnginePushCopyTask(seq, (void *)llama_post.get_input("input").phyAddr, (void *)layer.layer.get_output("output").phyAddr, llama_post.get_input("input").nSize, AXCL_MEMCPY_DEVICE_TO_DEVICE); ret != 0)
+                        {
+                            ALOGE("axclrtEnginePushModelTask failed");
+                            return "";
+                        }
+                    }
                     else if (m < _attr.axmodel_num - 1)
                     {
-                        axclrtMemcpy((void *)llama_layers[m + 1].layer.get_input("input").phyAddr,
-                                     (void *)layer.layer.get_output("output").phyAddr, layer.layer.get_input("input").nSize, AXCL_MEMCPY_DEVICE_TO_DEVICE);
+                        // axclrtMemcpy((void *)llama_layers[m + 1].layer.get_input("input").phyAddr, (void *)layer.layer.get_output("output").phyAddr, layer.layer.get_input("input").nSize, AXCL_MEMCPY_DEVICE_TO_DEVICE);
+                        if (auto ret = axclrtEnginePushCopyTask(seq, (void *)llama_layers[m + 1].layer.get_input("input").phyAddr, (void *)layer.layer.get_output("output").phyAddr, layer.layer.get_input("input").nSize, AXCL_MEMCPY_DEVICE_TO_DEVICE); ret != 0)
+                        {
+                            ALOGE("axclrtEnginePushModelTask failed");
+                            return "";
+                        }
                     }
                 }
 #endif
