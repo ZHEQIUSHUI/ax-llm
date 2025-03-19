@@ -17,7 +17,7 @@
 #include <axcl_rt_memory.h>
 
 #define USE_SET_INPUT 0
-#define USE_SEQUENCE 0
+#define USE_SEQUENCE 1
 
 typedef void (*LLMRuningCallback)(int *p_token, int n_token, const char *p_str, float token_per_sec, void *reserve);
 
@@ -325,11 +325,6 @@ public:
             // ALOGI("%f %f %f %f %f", bfloat16(embed[0]).fp32(), bfloat16(embed[1]).fp32(), bfloat16(embed[2]).fp32(), bfloat16(embed[3]).fp32(), bfloat16(embed[4]).fp32());
 #if USE_SEQUENCE
             axclrtEngineSequence seq = nullptr;
-            if (auto ret = axclrtEngineCreateSequence(&seq); ret != 0)
-            {
-                ALOGE("axclrtEngineCreateSequence failed");
-                return "";
-            }
 #endif
             for (int m = 0; m < _attr.axmodel_num; m++)
             {
@@ -337,6 +332,17 @@ public:
                 {
                     break;
                 }
+#if USE_SEQUENCE
+                if (m % 2 == 0)
+                {
+                    if (auto ret = axclrtEngineCreateSequence(&seq); ret != 0)
+                    {
+                        ALOGE("axclrtEngineCreateSequence failed");
+                        return "";
+                    }
+                }
+
+#endif
 
                 auto &layer = llama_layers[m];
 
@@ -421,6 +427,20 @@ public:
                             return "";
                         }
                     }
+
+                    if (m % 2 == 1)
+                    {
+                        if (auto ret = axclrtEngineSubmitSequence(seq); ret != 0)
+                        {
+                            ALOGE("axclrtEngineSubmitSequence failed");
+                            return "";
+                        }
+                        if (auto ret = axclrtEngineDestroySequence(seq); ret != 0)
+                        {
+                            ALOGE("axclrtEngineDestroySequence failed");
+                            return "";
+                        }
+                    }
 #else
                     axclrtMemcpy(input_k_cache_ptr + indices * _attr.kv_cache_size, (void *)layer.layer.get_output("K_cache_out").phyAddr, sizeof(unsigned short) * _attr.kv_cache_size, AXCL_MEMCPY_DEVICE_TO_DEVICE);
                     axclrtMemcpy(input_v_cache_ptr + indices * _attr.kv_cache_size, (void *)layer.layer.get_output("V_cache_out").phyAddr, sizeof(unsigned short) * _attr.kv_cache_size, AXCL_MEMCPY_DEVICE_TO_DEVICE);
@@ -441,44 +461,12 @@ public:
             mask[indices] = 0;
             if (indices + 1 < token_ids.size())
             {
-#if USE_SEQUENCE
-                if (auto ret = axclrtEngineSubmitSequence(seq); ret != 0)
-                {
-                    ALOGE("axclrtEngineSubmitSequence failed");
-                    return "";
-                }
-                if (auto ret = axclrtEngineDestroySequence(seq); ret != 0)
-                {
-                    ALOGE("axclrtEngineDestroySequence failed");
-                    return "";
-                }
-#endif
-
                 next_token = token_ids[indices + 1];
             }
             else
             {
                 // post process
-
-#if USE_SEQUENCE
-                if (auto ret = axclrtEnginePushModelTask(seq, llama_post.getModelID(), llama_post.getContextID(), 0, llama_post.getIO()); ret != 0)
-                {
-                    ALOGE("axclrtEnginePushModelTask failed");
-                    return "";
-                }
-                if (auto ret = axclrtEngineSubmitSequence(seq); ret != 0)
-                {
-                    ALOGE("axclrtEngineSubmitSequence failed");
-                    return "";
-                }
-                if (auto ret = axclrtEngineDestroySequence(seq); ret != 0)
-                {
-                    ALOGE("axclrtEngineDestroySequence failed");
-                    return "";
-                }
-#else
                 llama_post.inference();
-#endif
 
                 auto &output_post = llama_post.get_output("output");
                 unsigned short *post_out = (unsigned short *)output_post.pVirAddr;

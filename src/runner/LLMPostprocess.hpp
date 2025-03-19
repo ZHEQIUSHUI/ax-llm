@@ -183,13 +183,18 @@ private:
         return filtered_indices[dist(gen)];
     }
 
+    std::vector<size_t> indices;
     // 限制候选 token 数
     int top_k_sampling(const std::vector<float> &logits, int k)
     {
         // std::vector<float> probs = softmax(logits);
 
         // 获取 top-k 索引
-        std::vector<size_t> indices(logits.size());
+        if (indices.size() != logits.size())
+        {
+            indices.resize(logits.size());
+        }
+
         std::iota(indices.begin(), indices.end(), 0);
         std::partial_sort(indices.begin(), indices.begin() + k, indices.end(), [&](size_t i, size_t j)
                           { return logits[i] > logits[j]; });
