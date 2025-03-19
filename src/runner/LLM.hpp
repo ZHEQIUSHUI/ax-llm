@@ -17,6 +17,7 @@
 #include <axcl_rt_memory.h>
 
 #define USE_SET_INPUT 0
+#define USE_SEQUENCE 0
 
 typedef void (*LLMRuningCallback)(int *p_token, int n_token, const char *p_str, float token_per_sec, void *reserve);
 
@@ -322,13 +323,14 @@ public:
             axclrtMemcpy((void *)llama_layers[0].layer.get_input("input").phyAddr, embed.data(), llama_layers[0].layer.get_input("input").nSize, AXCL_MEMCPY_HOST_TO_DEVICE);
 
             // ALOGI("%f %f %f %f %f", bfloat16(embed[0]).fp32(), bfloat16(embed[1]).fp32(), bfloat16(embed[2]).fp32(), bfloat16(embed[3]).fp32(), bfloat16(embed[4]).fp32());
+#if USE_SEQUENCE
             axclrtEngineSequence seq = nullptr;
             if (auto ret = axclrtEngineCreateSequence(&seq); ret != 0)
             {
                 ALOGE("axclrtEngineCreateSequence failed");
                 return "";
             }
-
+#endif
             for (int m = 0; m < _attr.axmodel_num; m++)
             {
                 if (b_stop)
@@ -344,9 +346,7 @@ public:
                 // axclrtMemcpy((void *)layer.layer.get_input("mask").phyAddr, mask.size() * sizeof(unsigned short), mask.data(), mask.size() * sizeof(unsigned short), AXCL_MEMCPY_HOST_TO_DEVICE);
                 layer.layer.set_input(layer.layer.get_input("mask").nIdx, (unsigned long long)(p_mask_list + indices * (_attr.kv_cache_num + 1)), mask.size() * sizeof(unsigned short));
 #else
-                // axclrtMemcpy((void *)layer.layer.get_input("indices").phyAddr, p_indices_list + indices, sizeof(indices), AXCL_MEMCPY_DEVICE_TO_DEVICE);
-                // axclrtMemcpy((void *)layer.layer.get_input("mask").phyAddr, p_mask_list + indices * (_attr.kv_cache_num + 1), mask.size() * sizeof(unsigned short), AXCL_MEMCPY_DEVICE_TO_DEVICE);
-
+#if USE_SEQUENCE
                 if (auto ret = axclrtEnginePushCopyTask(seq, (void *)layer.layer.get_input("indices").phyAddr, p_indices_list + indices, sizeof(indices), AXCL_MEMCPY_DEVICE_TO_DEVICE); ret != 0)
                 {
                     ALOGE("axclrtEnginePushModelTask failed");
@@ -357,6 +357,12 @@ public:
                     ALOGE("axclrtEnginePushModelTask failed");
                     return "";
                 }
+#else
+                axclrtMemcpy((void *)layer.layer.get_input("indices").phyAddr, p_indices_list + indices, sizeof(indices), AXCL_MEMCPY_DEVICE_TO_DEVICE);
+                axclrtMemcpy((void *)layer.layer.get_input("mask").phyAddr, p_mask_list + indices * (_attr.kv_cache_num + 1), mask.size() * sizeof(unsigned short), AXCL_MEMCPY_DEVICE_TO_DEVICE);
+
+#endif
+
 #endif
 
                 // if (m == 0)
@@ -370,20 +376,22 @@ public:
                     layer.layer.set_output(layer.layer.get_output("V_cache_out").nIdx, (unsigned long long)(input_v_cache_ptr + indices * _attr.kv_cache_size), sizeof(unsigned short) * _attr.kv_cache_size);
                 }
 #endif
-                // layer.layer.inference();
+//
+#if USE_SEQUENCE
                 if (auto ret = axclrtEnginePushModelTask(seq, layer.layer.getModelID(), layer.layer.getContextID(), 0, layer.layer.getIO()); ret != 0)
                 {
                     ALOGE("axclrtEnginePushModelTask failed");
                     return "";
                 }
+#else
+                layer.layer.inference();
+#endif
 #if !USE_SET_INPUT
                 {
                     unsigned short *input_k_cache_ptr = (unsigned short *)layer.layer.get_input("K_cache").phyAddr;
                     unsigned short *input_v_cache_ptr = (unsigned short *)layer.layer.get_input("V_cache").phyAddr;
 
-                    // axclrtMemcpy(input_k_cache_ptr + indices * _attr.kv_cache_size, (void *)layer.layer.get_output("K_cache_out").phyAddr, sizeof(unsigned short) * _attr.kv_cache_size, AXCL_MEMCPY_DEVICE_TO_DEVICE);
-                    // axclrtMemcpy(input_v_cache_ptr + indices * _attr.kv_cache_size, (void *)layer.layer.get_output("V_cache_out").phyAddr, sizeof(unsigned short) * _attr.kv_cache_size, AXCL_MEMCPY_DEVICE_TO_DEVICE);
-
+#if USE_SEQUENCE
                     if (auto ret = axclrtEnginePushCopyTask(seq, input_k_cache_ptr + indices * _attr.kv_cache_size, (void *)layer.layer.get_output("K_cache_out").phyAddr, sizeof(unsigned short) * _attr.kv_cache_size, AXCL_MEMCPY_DEVICE_TO_DEVICE); ret != 0)
                     {
                         ALOGE("axclrtEnginePushModelTask failed");
@@ -413,6 +421,19 @@ public:
                             return "";
                         }
                     }
+#else
+                    axclrtMemcpy(input_k_cache_ptr + indices * _attr.kv_cache_size, (void *)layer.layer.get_output("K_cache_out").phyAddr, sizeof(unsigned short) * _attr.kv_cache_size, AXCL_MEMCPY_DEVICE_TO_DEVICE);
+                    axclrtMemcpy(input_v_cache_ptr + indices * _attr.kv_cache_size, (void *)layer.layer.get_output("V_cache_out").phyAddr, sizeof(unsigned short) * _attr.kv_cache_size, AXCL_MEMCPY_DEVICE_TO_DEVICE);
+
+                    if (m == _attr.axmodel_num - 1)
+                    {
+                        axclrtMemcpy((void *)llama_post.get_input("input").phyAddr, (void *)layer.layer.get_output("output").phyAddr, llama_post.get_input("input").nSize, AXCL_MEMCPY_DEVICE_TO_DEVICE);
+                    }
+                    else if (m < _attr.axmodel_num - 1)
+                    {
+                        axclrtMemcpy((void *)llama_layers[m + 1].layer.get_input("input").phyAddr, (void *)layer.layer.get_output("output").phyAddr, layer.layer.get_input("input").nSize, AXCL_MEMCPY_DEVICE_TO_DEVICE);
+                    }
+#endif
                 }
 #endif
             }
@@ -420,6 +441,7 @@ public:
             mask[indices] = 0;
             if (indices + 1 < token_ids.size())
             {
+#if USE_SEQUENCE
                 if (auto ret = axclrtEngineSubmitSequence(seq); ret != 0)
                 {
                     ALOGE("axclrtEngineSubmitSequence failed");
@@ -430,13 +452,15 @@ public:
                     ALOGE("axclrtEngineDestroySequence failed");
                     return "";
                 }
+#endif
 
                 next_token = token_ids[indices + 1];
             }
             else
             {
                 // post process
-                // llama_post.inference();
+
+#if USE_SEQUENCE
                 if (auto ret = axclrtEnginePushModelTask(seq, llama_post.getModelID(), llama_post.getContextID(), 0, llama_post.getIO()); ret != 0)
                 {
                     ALOGE("axclrtEnginePushModelTask failed");
@@ -452,6 +476,9 @@ public:
                     ALOGE("axclrtEngineDestroySequence failed");
                     return "";
                 }
+#else
+                llama_post.inference();
+#endif
 
                 auto &output_post = llama_post.get_output("output");
                 unsigned short *post_out = (unsigned short *)output_post.pVirAddr;
