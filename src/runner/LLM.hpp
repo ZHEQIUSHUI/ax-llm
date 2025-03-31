@@ -383,17 +383,34 @@ public:
     {
         std::vector<int> input_ids = tokenizer->Encode(prompt, true);
 
-        constexpr int IMG_CONTEXT = 151648;	// InternVL2
-        // constexpr int IMG_CONTEXT = 151667; // InternVL2.5
+        // constexpr int IMG_CONTEXT = 151648; // InternVL2
+        constexpr int IMG_CONTEXT = 151667; // InternVL2.5
         int offset = 0;
+        int img_context_count = 0;
 
         for (size_t i = 0; i < input_ids.size(); i++)
         {
             if (input_ids[i] == IMG_CONTEXT)
             {
-                offset = i;
-                break;
+                img_context_count++;
+                if (img_context_count == 1)
+                {
+                    offset = i;
+                }
             }
+        }
+
+        if (offset == 0)
+        {
+            ALOGE("offset == 0");
+            return -1;
+        }
+        
+
+        if (img_context_count != img_embed.size() / _attr.tokens_embed_size)
+        {
+            ALOGE("img_context_count(%d) != img_embed.size() / tokens_embed_size(%d)", img_context_count, img_embed.size() / _attr.tokens_embed_size);
+            return -1;
         }
 
         // for (size_t i = 0; i < input_ids.size(); i++)
@@ -415,6 +432,7 @@ public:
         }
         memcpy(out_embed.data() + offset * _attr.tokens_embed_size, img_embed.data(), img_embed.size() * sizeof(unsigned short));
 
+        ALOGI("offset : %d, size : %d", offset, out_embed.size());
         return 0;
     }
 
@@ -425,7 +443,7 @@ public:
         return Run(test_embed);
     }
 
-    std::string Run(std::vector<unsigned short> test_embed)
+    std::string Run(std::vector<unsigned short> &test_embed)
     {
         b_stop = false;
         std::string final_out;
@@ -712,6 +730,13 @@ public:
 
         final_out = tokenizer->Decode(token_ids);
 
+        for (size_t i = 0; i < _attr.axmodel_num; i++)
+        {
+            memset(llama_layers[i].layer.get_input(prefill_grpid, "K_cache").pVirAddr, 0, llama_layers[i].layer.get_input(prefill_grpid, "K_cache").nSize);
+            memset(llama_layers[i].layer.get_input(prefill_grpid, "V_cache").pVirAddr, 0, llama_layers[i].layer.get_input(prefill_grpid, "V_cache").nSize);
+            memset(llama_layers[i].layer.get_input(decode_grpid, "K_cache").pVirAddr, 0, llama_layers[i].layer.get_input(decode_grpid, "K_cache").nSize);
+            memset(llama_layers[i].layer.get_input(decode_grpid, "V_cache").pVirAddr, 0, llama_layers[i].layer.get_input(decode_grpid, "V_cache").nSize);
+        }
         return final_out;
     }
 };
