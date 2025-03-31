@@ -217,8 +217,8 @@ public:
         }
         image_encoder.set_auto_sync_after_inference(true);
         image_encoder.set_auto_sync_before_inference(true);
-        _attr.image_encoder_height = image_encoder.get_input(0).vShape[2];
-        _attr.image_encoder_width = image_encoder.get_input(0).vShape[3];
+        _attr.image_encoder_height = image_encoder.get_input(0).vShape[1];
+        _attr.image_encoder_width = image_encoder.get_input(0).vShape[2];
 
         printf("\n");
         {
@@ -364,45 +364,14 @@ public:
 
     int Encode(cv::Mat src, std::vector<unsigned short> &out_embed)
     {
-        std::vector<float> mean = {0.485, 0.456, 0.406};
-        std::vector<float> scale = {0.229, 0.224, 0.225};
         timer t;
         t.start();
         cv::Mat dst;
         cv::resize(src, dst, cv::Size(_attr.image_encoder_width, _attr.image_encoder_height));
         cv::cvtColor(dst, dst, cv::COLOR_BGR2RGB);
 
-        // std::vector<float> input_data(dst.rows * dst.cols * 3);
-
-        float *input_data = (float *)image_encoder.get_input(0).pVirAddr;
-
-        unsigned char *img_data = dst.data;
-        int letterbox_rows = dst.rows;
-        int letterbox_cols = dst.cols;
-
-        for (int h = 0; h < letterbox_rows; h++)
-        {
-            for (int w = 0; w < letterbox_cols; w++)
-            {
-                for (int c = 0; c < 3; c++)
-                {
-                    int in_index = h * letterbox_cols * 3 + w * 3 + c;
-                    int out_index = c * letterbox_rows * letterbox_cols + h * letterbox_cols + w;
-                    input_data[out_index] = (float(img_data[in_index]) / 255.0 - mean[c]) / scale[c];
-                }
-            }
-        }
-
-        // void *data = image_encoder.get_input("input").pVirAddr;
-        // memcpy(data, dst.data, dst.rows * dst.cols * 3);
-
-        // std::vector<char> vit_in;
-        // if (!read_file("/home/axera/internvl2_5-8b-mpo_ax-infer/img.bin", vit_in))
-        // {
-        //     ALOGE("read img.bin failed");
-        //     return -1;
-        // }
-        // memcpy(input_data, vit_in.data(), image_encoder.get_input(0).nSize);
+        void *data = (void *)image_encoder.get_input(0).pVirAddr;
+        memcpy(data, dst.data, dst.rows * dst.cols * 3);
 
         image_encoder.inference();
         int size = 1;
@@ -450,8 +419,8 @@ public:
         std::vector<int> input_ids = tokenizer->Encode(prompt, true);
 
         // constexpr int IMG_CONTEXT = 151648;	// InternVL2
-        // constexpr int IMG_CONTEXT = 151667; // InternVL2.5
-        constexpr int IMG_CONTEXT = 92546; // InternVL2.5-8B-MPO
+        constexpr int IMG_CONTEXT = 151667; // InternVL2.5
+        // constexpr int IMG_CONTEXT = 92546; // InternVL2.5-8B-MPO
         int offset = 0;
 
         for (size_t i = 0; i < input_ids.size(); i++)
