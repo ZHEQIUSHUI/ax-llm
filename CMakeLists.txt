@@ -20,6 +20,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(BUILD_WITH_YOLOV5_TEST OFF)
 
+find_package(OpenMP REQUIRED)
+
 # set(SPM_ENABLE_SHARED OFF)
 # add_subdirectory(third_party/sentencepiece)
 # include_directories(third_party/sentencepiece/src)
@@ -52,6 +54,7 @@ endif()
 function(build_exec name main_source)
     add_executable(${name} ${main_source}
                     src/runner/ax_model_runner/ax_model_runner_ax650.cpp 
+                    src/runner/ax_model_runner/untar.cpp
                     # src/runner/ax_model_runner/ax_model_runner_ax650_host.cpp
                     src/runner/utils/axcl_manager.cpp
                     src/runner/utils/memory_utils.cpp 
@@ -62,7 +65,7 @@ function(build_exec name main_source)
 
     # target_link_libraries(${name} ax_engine ax_interpreter ax_sys)
     
-    target_link_libraries(${name} spdlog axcl_pcie_dma axcl_pcie_msg axcl_token axcl_comm axcl_pkg axcl_rt pthread)
+    target_link_libraries(${name} spdlog axcl_pcie_dma axcl_pcie_msg axcl_token axcl_comm axcl_pkg axcl_rt pthread OpenMP::OpenMP_CXX)
 
     # target_link_libraries(${name} sentencepiece re2::re2)
     install(TARGETS ${name} DESTINATION bin)
@@ -70,6 +73,8 @@ endfunction()
 
 build_exec(main src/main.cpp)
 build_exec(main_api src/main_api.cpp)
+build_exec(main_single src/main_single.cpp)
+build_exec(main_single_runner src/main_single_runner.cpp)
 
 file(GLOB RUN_SCRIPT "${CMAKE_SOURCE_DIR}/scripts/*.py" "${CMAKE_SOURCE_DIR}/scripts/*.sh")
 install(FILES ${RUN_SCRIPT} DESTINATION bin/)

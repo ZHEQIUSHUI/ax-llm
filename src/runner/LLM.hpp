@@ -7,7 +7,7 @@
 #include "bfloat16.hpp"
 #include "Tokenizer/Tokenizer.hpp"
 #include "LLMEmbedSelector.hpp"
-#include "ax_model_runner/ax_model_runner_ax650.hpp"
+#include "ax_model_runner/ax_parallel_runner.hpp"
 
 // #include "ax_cmm_utils.hpp"
 #include "cqdm.h"
@@ -17,6 +17,7 @@
 // #include <axcl.h>
 // #include <axcl_rt_memory.h>
 #include "utils/axcl_manager.h"
+#include <axcl_rt_p2p.h>
 
 #define ALIGN_DOWN(x, a) ((x) & ~((a) - 1))
 
@@ -71,6 +72,8 @@ private:
     std::shared_ptr<BaseTokenizer> tokenizer;
     LLaMaEmbedSelector embed_selector;
 
+    AXCL_P2P_UNIT_HANDLE p2p_handle = nullptr;
+
     LLMAttrType _attr;
 
     struct LLMLayer
@@ -82,7 +85,7 @@ private:
     };
 
     std::vector<LLMLayer> llama_layers;
-    ax_runner_ax650 llama_post;
+    ax_parallel_runner llama_post;
     // ax_runner_ax650 image_encoder;
 
     // int prefill_grpid = 1;
@@ -184,6 +187,40 @@ public:
             }
         }
 
+        {
+
+            axclrtDeviceList device_list;
+            if (const axclError ret = axclrtGetDeviceList(&device_list); AXCL_SUCC != ret || 0 == device_list.num)
+            {
+                printf("[ERROR] no device is connected.\n");
+            }
+            printf("[INFO] device num: %d.\n", device_list.num);
+            if (2 > device_list.num)
+            {
+                printf("[ERROR] device num is less than 2.\n");
+                return 2;
+            }
+
+            size_t p2p_cmm_size = 8 * 1024 * 1024;
+            axclrtP2PUnitInfo p2p_unit;
+            p2p_unit.u32DeviceNum = _attr.dev_ids.size();
+            for (uint32_t i = 0; i < p2p_unit.u32DeviceNum; ++i)
+            {
+                p2p_unit.n32DeviceId[i] = device_list.devices[_attr.dev_ids[i]];
+                p2p_unit.u32DeviceMemSize[i] = p2p_cmm_size;
+            }
+
+            if (const auto ret = axclrtCreateP2PUnit(&p2p_unit, &p2p_handle); AXCL_SUCC != ret)
+            {
+                printf("[ERROR] axcl init p2p unit fail, ret = 0x%x\n", ret);
+                return -1;
+            }
+            else
+            {
+                std::cout << "[INFO] p2p unit created." << std::endl;
+            }
+        }
+
         llama_layers.resize(attr.axmodel_num);
 
         auto dev_assignments = distributeModels(_attr.dev_ids.size(), attr.axmodel_num);
@@ -191,24 +228,39 @@ public:
         char axmodel_path[1024];
         for (int i = 0; i < attr.axmodel_num; i++)
         {
+            // std::vector<ax_parallel_runner_config> configs;
+            // for (int j = 0; j < _attr.dev_ids.size(); j++)
+            // {
+            //     sprintf(axmodel_path, attr.template_filename_axmodel.c_str(), i, j);
+            //     configs.push_back({.model_path = axmodel_path, .dev_id = _attr.dev_ids[j]});
+            //     ALOGI("init axmodel(%s) int dev-%d", axmodel_path, _attr.dev_ids[j]);
+            // }
             sprintf(axmodel_path, attr.template_filename_axmodel.c_str(), i);
+
             llama_layers[i].filename = axmodel_path;
 
             int ret = llama_layers[i].layer.init(llama_layers[i].filename.c_str(), _attr.dev_ids[dev_assignments[i]]);
-            // llama_layers[i].layer.set_auto_sync_after_inference(true);
-            // llama_layers[i].layer.set_auto_sync_before_inference(true);
 
             if (ret != 0)
             {
                 ALOGE("init axmodel(%s) failed", llama_layers[i].filename.c_str());
                 return false;
             }
-            int remain_cmm = axcl_GetCMMRemain(_attr.dev_ids[dev_assignments[i]]);
-            sprintf(axmodel_path, "init %d axmodel ok,devid(%d) remain_cmm(%d MB)", i, _attr.dev_ids[dev_assignments[i]], remain_cmm);
+            // int remain_cmm = axcl_GetCMMRemain(_attr.dev_ids[dev_assignments[i]]);
+            sprintf(axmodel_path, "init %d axmodel ok", i);
             update_cqdm(&cqdm, i + 2, "count", axmodel_path);
         }
 
-        int ret = llama_post.init(attr.filename_post_axmodel.c_str(), llama_layers[llama_layers.size() - 1].layer.get_devid());
+        // std::vector<ax_parallel_runner_config> configs;
+        // for (int j = 0; j < _attr.dev_ids.size(); j++)
+        // {
+        //     sprintf(axmodel_path, "tensor_test/llm_post/qwen2_r%d_post.axmodel", j);
+        //     printf("axmodel_path: %s\n", axmodel_path);
+        //     configs.push_back({.model_path = axmodel_path, .dev_id = _attr.dev_ids[j]});
+        //     ALOGI("init axmodel(%s) int dev-%d", axmodel_path, _attr.dev_ids[j]);
+        // }
+
+        int ret = llama_post.init("tensor_test/llm_post/qwen2_post.tar", _attr.dev_ids);
 
         if (ret != 0)
         {
@@ -297,6 +349,12 @@ public:
 
         for (auto &devid : _attr.dev_ids)
             axcl_Exit(devid);
+
+        if (nullptr != p2p_handle)
+        {
+            axclrtDestoryP2PUnit(p2p_handle);
+            printf("[INFO] p2p unit destroyed.\n");
+        }
     }
 
     LLMPostprocess *getPostprocess()
@@ -1010,14 +1068,14 @@ public:
         {
 
             // post process
-            auto &input = llama_post.get_input("input");
+            auto &input = llama_post.get_input(0);
             // memcpy(input.pVirAddr, embed.data(), embed.size() * sizeof(unsigned short));
             axcl_Memcpy((void *)input.phyAddr, embed.data(), embed.size() * sizeof(unsigned short), axclrtMemcpyKind::AXCL_MEMCPY_HOST_TO_DEVICE, llama_post.get_devid());
             llama_post.inference();
 
             int max_index;
 
-            auto &output_post = llama_post.get_output("output");
+            auto &output_post = llama_post.get_output(0);
             axcl_Memcpy(output_post.pVirAddr, (void *)output_post.phyAddr, output_post.nSize, axclrtMemcpyKind::AXCL_MEMCPY_DEVICE_TO_HOST, llama_post.get_devid());
             unsigned short *post_out = (unsigned short *)output_post.pVirAddr;
             float max_val = -MAXFLOAT;
@@ -1092,16 +1150,16 @@ public:
                 {
                     if (llama_post.get_devid() == layer.layer.get_devid())
                     {
-                        axcl_Memcpy((void *)llama_post.get_input("input").phyAddr,
-                                    (void *)layer.layer.get_output(decode_grpid, "output").phyAddr, llama_post.get_input("input").nSize, AXCL_MEMCPY_DEVICE_TO_DEVICE, llama_post.get_devid());
+                        axcl_Memcpy((void *)llama_post.get_input(0).phyAddr,
+                                    (void *)layer.layer.get_output(decode_grpid, "output").phyAddr, llama_post.get_input(0).nSize, AXCL_MEMCPY_DEVICE_TO_DEVICE, llama_post.get_devid());
                     }
                     else
                     {
                         axcl_Memcpy((void *)layer.layer.get_output(decode_grpid, "output").pVirAddr,
                                     (void *)layer.layer.get_output(decode_grpid, "output").phyAddr, layer.layer.get_output(decode_grpid, "output").nSize, AXCL_MEMCPY_DEVICE_TO_HOST, layer.layer.get_devid());
 
-                        axcl_Memcpy((void *)llama_post.get_input("input").phyAddr,
-                                    (void *)layer.layer.get_output(decode_grpid, "output").pVirAddr, llama_post.get_input("input").nSize, AXCL_MEMCPY_HOST_TO_DEVICE, llama_post.get_devid());
+                        axcl_Memcpy((void *)llama_post.get_input(0).phyAddr,
+                                    (void *)layer.layer.get_output(decode_grpid, "output").pVirAddr, llama_post.get_input(0).nSize, AXCL_MEMCPY_HOST_TO_DEVICE, llama_post.get_devid());
                     }
                 }
                 else if (m < _attr.axmodel_num - 1)
@@ -1132,7 +1190,7 @@ public:
                 // axcl_Memcpy((void *)input.phyAddr, embed.data(), embed.size() * sizeof(unsigned short), axclrtMemcpyKind::AXCL_MEMCPY_HOST_TO_DEVICE, llama_post.get_devid());
                 llama_post.inference();
 
-                auto &output_post = llama_post.get_output("output");
+                auto &output_post = llama_post.get_output(0);
                 axcl_Memcpy(output_post.pVirAddr, (void *)output_post.phyAddr, output_post.nSize, axclrtMemcpyKind::AXCL_MEMCPY_DEVICE_TO_HOST, llama_post.get_devid());
                 unsigned short *post_out = (unsigned short *)output_post.pVirAddr;
                 float max_val = -MAXFLOAT;

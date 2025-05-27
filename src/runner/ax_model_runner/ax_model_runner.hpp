@@ -60,7 +60,7 @@ public:
 
 public:
     virtual int init(const char *model_file, int devid) = 0;
-    virtual int init(char *model_buffer, size_t model_size) = 0;
+    virtual int init(char *model_buffer, size_t model_size, int devid) = 0;
 
     virtual void deinit() = 0;
 
