@@ -52,6 +52,8 @@ endif()
 # 添加 FLAGS 检查代码是否有明显 bug
 include(overlook.cmake)
 
+find_package(OpenMP REQUIRED)
+
 include_directories(src)
 include_directories(src/runner)
 include_directories(src/runner/utils)
@@ -69,12 +71,13 @@ function(build_exec name main_source)
                     src/runner/utils/memory_utils.cpp 
                     src/runner/utils/cqdm.cpp
                     src/runner/Tokenizer/Tokenizer.cpp
+                    src/runner/ax_model_runner/untar.cpp
                     # src/runner/Tokenizer/QwenTokenizer.cpp
                     )
 
     # target_link_libraries(${name} ax_engine ax_interpreter ax_sys)
     
-    target_link_libraries(${name} spdlog axcl_pcie_dma axcl_pcie_msg axcl_token axcl_comm axcl_pkg axcl_rt pthread)
+    target_link_libraries(${name} spdlog axcl_pcie_dma axcl_pcie_msg axcl_token axcl_comm axcl_pkg axcl_rt pthread OpenMP::OpenMP_CXX)
 
     # target_link_libraries(${name} sentencepiece re2::re2)
     install(TARGETS ${name} DESTINATION bin)
@@ -91,18 +94,3 @@ install(FILES ${LLAMA3_TOKENIZER} DESTINATION bin/llama3_tokenizer/)
 
 # add_executable(fp32_to_bf16 tools/fp32_to_bf16.cpp)
 
-if(BUILD_WITH_YOLOV5_TEST)
-    set(OpenCV_DIR ${CMAKE_SOURCE_DIR}/../3rdparty/libopencv-4.5.5-aarch64/lib/cmake/opencv4)
-    find_package(OpenCV REQUIRED)
-
-    add_executable(main_yolov5 src/main_yolov5.cpp src/runner/ax_model_runner/ax_model_runner_ax650.cpp src/runner/ax_model_runner/ax_model_runner_ax650_host.cpp src/runner/utils/memory_utils.cpp)
-    target_include_directories(main_yolov5 PRIVATE ${OpenCV_INCLUDE_DIRS} axcl/include)
-    target_link_libraries(main_yolov5 PRIVATE ${OpenCV_LIBS})
-    target_link_libraries(main_yolov5 PRIVATE spdlog axcl_pcie_dma axcl_pcie_msg axcl_token axcl_comm axcl_pkg axcl_rt)
-    target_link_libraries(main_yolov5 PRIVATE ax_engine ax_interpreter ax_sys)
-
-
-    add_executable(main_single src/main_single.cpp src/runner/ax_model_runner/ax_model_runner_ax650.cpp src/runner/ax_model_runner/ax_model_runner_ax650_host.cpp src/runner/utils/memory_utils.cpp)
-    target_link_libraries(main_single PRIVATE spdlog axcl_pcie_dma axcl_pcie_msg axcl_token axcl_comm axcl_pkg axcl_rt)
-    target_link_libraries(main_single PRIVATE ax_engine ax_interpreter ax_sys)
-endif()

@@ -123,8 +123,8 @@ class Request(BaseHTTPRequestHandler):
 if __name__ == "__main__":
 
     args = argparse.ArgumentParser()
-    args.add_argument('--host', type=str, default='localhost')
-    args.add_argument('--port', type=int, default=8080)
+    args.add_argument('--host', type=str, default='0.0.0.0')
+    args.add_argument('--port', type=int, default=12345)
     args = args.parse_args()
 
     host = (args.host, args.port)  #设定地址与端口号，'localhost'等价于'127.0.0.1'
