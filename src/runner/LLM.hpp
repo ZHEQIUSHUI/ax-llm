@@ -364,6 +364,36 @@ public:
 
                 layer.layer.inference();
 
+                if (indices == 0 && m == 0)
+                {
+                    {
+                        for (size_t i = 0; i < layer.layer.get_num_inputs(); i++)
+                        {
+                            auto in = layer.layer.get_input(i);
+                            FILE *fp = fopen(("dump_tp/input/" + in.sName + ".bin").c_str(), "wb");
+                            if (fp)
+                            {
+                                axcl_Memcpy(in.pVirAddr, (void *)in.phyAddr, in.nSize, AXCL_MEMCPY_DEVICE_TO_HOST, layer.layer.get_devid());
+                                fwrite(in.pVirAddr, in.nSize, 1, fp);
+                                fclose(fp);
+                            }
+                        }
+                    }
+                    {
+                        for (size_t i = 0; i < layer.layer.get_num_outputs(); i++)
+                        {
+                            auto out = layer.layer.get_output(i);
+                            FILE *fp = fopen(("dump_tp/output/" + out.sName + ".bin").c_str(), "wb");
+                            if (fp)
+                            {
+                                axcl_Memcpy(out.pVirAddr, (void *)out.phyAddr, out.nSize, AXCL_MEMCPY_DEVICE_TO_HOST, layer.layer.get_devid());
+                                fwrite(out.pVirAddr, out.nSize, 1, fp);
+                                fclose(fp);
+                            }
+                        }
+                    }
+                }
+
                 for (int rankid = 0; rankid < _attr.dev_ids.size(); rankid++)
                 {
                     unsigned short *input_k_cache_ptr = (unsigned short *)layer.layer.get_rank_input(rankid, "K_cache").phyAddr;
@@ -373,7 +403,7 @@ public:
                                 (void *)layer.layer.get_rank_output(rankid, "K_cache_out").phyAddr,
                                 sizeof(unsigned short) * _attr.kv_cache_size,
                                 AXCL_MEMCPY_DEVICE_TO_DEVICE, layer.layer.get_devid(rankid));
-                                
+
                     axcl_Memcpy(input_v_cache_ptr + indices * _attr.kv_cache_size,
                                 (void *)layer.layer.get_rank_output(rankid, "V_cache_out").phyAddr,
                                 sizeof(unsigned short) * _attr.kv_cache_size,

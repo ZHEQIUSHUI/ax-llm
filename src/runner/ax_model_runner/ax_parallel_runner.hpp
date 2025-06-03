@@ -125,6 +125,11 @@ public:
         for (int rankid = 0; rankid < m_runners.size(); rankid++)
         {
             auto input = get_rank_input(rankid, grpid, idx);
+            if (input.nSize != size)
+            {
+                ALOGE("input size not match, input size=%d, size=%d", input.nSize, size);
+                return -1;
+            }
             int ret = axcl_Memcpy((void *)input.phyAddr, data, size, AXCL_MEMCPY_HOST_TO_DEVICE, get_devid(rankid));
             if (ret != 0)
             {
