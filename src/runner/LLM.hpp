@@ -19,6 +19,25 @@
 #include "utils/axcl_manager.h"
 #include <axcl_rt_p2p.h>
 
+#define ENABLE_COST 1
+#define COST_INTERVAL 500
+#if ENABLE_COST
+#define COST(func)                                               \
+    do                                                           \
+    {                                                            \
+        static int _cost_counter = 0;                            \
+        _cost_counter++;                                         \
+        timer _timer;                                            \
+        func;                                                    \
+        if (_cost_counter % (COST_INTERVAL) == 0)                \
+        {                                                        \
+            printf("%s cost: %3.2f ms\n", #func, _timer.cost()); \
+        }                                                        \
+    } while (0)
+#else
+#define COST(func) func
+#endif
+
 typedef void (*LLMRuningCallback)(int *p_token, int n_token, const char *p_str, float token_per_sec, void *reserve);
 
 struct LLMAttrType
@@ -246,8 +265,8 @@ public:
         {
             _attr.max_token_len = llama_layers[0].layer.get_input("mask").nSize / sizeof(unsigned short) - 1;
             ALOGI("max_token_len : %d", _attr.max_token_len);
-            _attr.kv_cache_size = llama_layers[0].layer.get_output("K_cache_out").nSize / sizeof(unsigned short);
-            _attr.kv_cache_num = llama_layers[0].layer.get_input("K_cache").nSize / _attr.kv_cache_size / sizeof(unsigned short);
+            _attr.kv_cache_size = llama_layers[0].layer.get_output("K_cache_out_rank0").nSize / sizeof(unsigned short);
+            _attr.kv_cache_num = llama_layers[0].layer.get_input("K_cache_rank0").nSize / _attr.kv_cache_size / sizeof(unsigned short);
             ALOGI("kv_cache_size : %d, kv_cache_num: %d", _attr.kv_cache_size, _attr.kv_cache_num);
             if (_attr.max_token_len > _attr.kv_cache_num)
             {
@@ -358,54 +377,58 @@ public:
                 auto &layer = llama_layers[m];
 
                 // axcl_Memcpy((void *)layer.layer.get_input("indices").phyAddr, &indices, sizeof(indices), AXCL_MEMCPY_HOST_TO_DEVICE, layer.layer.get_devid());
+
                 layer.layer.set_input("indices", &indices, sizeof(indices));
-                // axcl_Memcpy((void *)layer.layer.get_input("mask").phyAddr, mask.data(), mask.size() * sizeof(unsigned short), AXCL_MEMCPY_HOST_TO_DEVICE, layer.layer.get_devid());
+
                 layer.layer.set_input("mask", mask.data(), mask.size() * sizeof(unsigned short));
+
+                // axcl_Memcpy((void *)layer.layer.get_input("mask").phyAddr, mask.data(), mask.size() * sizeof(unsigned short), AXCL_MEMCPY_HOST_TO_DEVICE, layer.layer.get_devid());
 
                 layer.layer.inference();
 
-                if (indices == 0 && m == 0)
-                {
-                    {
-                        for (size_t i = 0; i < layer.layer.get_num_inputs(); i++)
-                        {
-                            auto in = layer.layer.get_input(i);
-                            FILE *fp = fopen(("dump_tp/input/" + in.sName + ".bin").c_str(), "wb");
-                            if (fp)
-                            {
-                                axcl_Memcpy(in.pVirAddr, (void *)in.phyAddr, in.nSize, AXCL_MEMCPY_DEVICE_TO_HOST, layer.layer.get_devid());
-                                fwrite(in.pVirAddr, in.nSize, 1, fp);
-                                fclose(fp);
-                            }
-                        }
-                    }
-                    {
-                        for (size_t i = 0; i < layer.layer.get_num_outputs(); i++)
-                        {
-                            auto out = layer.layer.get_output(i);
-                            FILE *fp = fopen(("dump_tp/output/" + out.sName + ".bin").c_str(), "wb");
-                            if (fp)
-                            {
-                                axcl_Memcpy(out.pVirAddr, (void *)out.phyAddr, out.nSize, AXCL_MEMCPY_DEVICE_TO_HOST, layer.layer.get_devid());
-                                fwrite(out.pVirAddr, out.nSize, 1, fp);
-                                fclose(fp);
-                            }
-                        }
-                    }
-                }
+                // if (indices == 0 && m == 0)
+                // {
+                //     {
+                //         for (size_t i = 0; i < layer.layer.get_num_inputs(); i++)
+                //         {
+                //             auto in = layer.layer.get_input(i);
+                //             FILE *fp = fopen(("dump_tp/input/" + in.sName + ".bin").c_str(), "wb");
+                //             if (fp)
+                //             {
+                //                 axcl_Memcpy(in.pVirAddr, (void *)in.phyAddr, in.nSize, AXCL_MEMCPY_DEVICE_TO_HOST, layer.layer.get_devid());
+                //                 fwrite(in.pVirAddr, in.nSize, 1, fp);
+                //                 fclose(fp);
+                //             }
+                //         }
+                //     }
+                //     {
+                //         for (size_t i = 0; i < layer.layer.get_num_outputs(); i++)
+                //         {
+                //             auto out = layer.layer.get_output(i);
+                //             FILE *fp = fopen(("dump_tp/output/" + out.sName + ".bin").c_str(), "wb");
+                //             if (fp)
+                //             {
+                //                 axcl_Memcpy(out.pVirAddr, (void *)out.phyAddr, out.nSize, AXCL_MEMCPY_DEVICE_TO_HOST, layer.layer.get_devid());
+                //                 fwrite(out.pVirAddr, out.nSize, 1, fp);
+                //                 fclose(fp);
+                //             }
+                //         }
+                //     }
+                // }
 
+#pragma omp parallel for
                 for (int rankid = 0; rankid < _attr.dev_ids.size(); rankid++)
                 {
-                    unsigned short *input_k_cache_ptr = (unsigned short *)layer.layer.get_rank_input(rankid, "K_cache").phyAddr;
-                    unsigned short *input_v_cache_ptr = (unsigned short *)layer.layer.get_rank_input(rankid, "V_cache").phyAddr;
+                    unsigned short *input_k_cache_ptr = (unsigned short *)layer.layer.get_rank_input(rankid, "K_cache_rank" + std::to_string(rankid)).phyAddr;
+                    unsigned short *input_v_cache_ptr = (unsigned short *)layer.layer.get_rank_input(rankid, "V_cache_rank" + std::to_string(rankid)).phyAddr;
 
                     axcl_Memcpy(input_k_cache_ptr + indices * _attr.kv_cache_size,
-                                (void *)layer.layer.get_rank_output(rankid, "K_cache_out").phyAddr,
+                                (void *)layer.layer.get_rank_output(rankid, "K_cache_out_rank" + std::to_string(rankid)).phyAddr,
                                 sizeof(unsigned short) * _attr.kv_cache_size,
                                 AXCL_MEMCPY_DEVICE_TO_DEVICE, layer.layer.get_devid(rankid));
 
                     axcl_Memcpy(input_v_cache_ptr + indices * _attr.kv_cache_size,
-                                (void *)layer.layer.get_rank_output(rankid, "V_cache_out").phyAddr,
+                                (void *)layer.layer.get_rank_output(rankid, "V_cache_out_rank" + std::to_string(rankid)).phyAddr,
                                 sizeof(unsigned short) * _attr.kv_cache_size,
                                 AXCL_MEMCPY_DEVICE_TO_DEVICE, layer.layer.get_devid(rankid));
                 }
@@ -422,8 +445,6 @@ public:
                     axcl_Memcpy((void *)layer.layer.get_output("output").pVirAddr,
                                 (void *)layer.layer.get_output("output").phyAddr, layer.layer.get_output("output").nSize, AXCL_MEMCPY_DEVICE_TO_HOST, layer.layer.get_devid());
 
-                    // axcl_Memcpy((void *)llama_layers[m + 1].layer.get_input("input").phyAddr,
-                    //             (void *)layer.layer.get_output("output").pVirAddr, layer.layer.get_input("input").nSize, AXCL_MEMCPY_HOST_TO_DEVICE, llama_layers[m + 1].layer.get_devid());
                     llama_layers[m + 1].layer.set_input("input", layer.layer.get_output("output").pVirAddr, layer.layer.get_output("output").nSize);
                 }
             }

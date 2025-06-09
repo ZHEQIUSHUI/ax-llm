@@ -122,19 +122,20 @@ public:
      */
     int set_input(int grpid, int idx, void *data, int size)
     {
+        std::vector<int> rets(m_runners.size());
+#pragma omp parallel for
         for (int rankid = 0; rankid < m_runners.size(); rankid++)
         {
             auto input = get_rank_input(rankid, grpid, idx);
-            if (input.nSize != size)
-            {
-                ALOGE("input size not match, input size=%d, size=%d", input.nSize, size);
-                return -1;
-            }
             int ret = axcl_Memcpy((void *)input.phyAddr, data, size, AXCL_MEMCPY_HOST_TO_DEVICE, get_devid(rankid));
-            if (ret != 0)
+            rets[rankid] = ret;
+        }
+        for (int rankid = 0; rankid < m_runners.size(); rankid++)
+        {
+            if (rets[rankid] != 0)
             {
-                ALOGE("axcl_Memcpy failed, ret=%d", ret);
-                return ret;
+                ALOGE("axcl_Memcpy failed, ret=%d", rets[rankid]);
+                return rets[rankid];
             }
         }
         return 0;
@@ -155,14 +156,20 @@ public:
 
     int set_input(int grpid, const std::string &name, void *data, int size)
     {
+        std::vector<int> rets(m_runners.size());
+#pragma omp parallel for
         for (int rankid = 0; rankid < m_runners.size(); rankid++)
         {
             auto input = get_rank_input(rankid, grpid, name);
             int ret = axcl_Memcpy((void *)input.phyAddr, data, size, AXCL_MEMCPY_HOST_TO_DEVICE, get_devid(rankid));
-            if (ret != 0)
+            rets[rankid] = ret;
+        }
+        for (int rankid = 0; rankid < m_runners.size(); rankid++)
+        {
+            if (rets[rankid] != 0)
             {
-                ALOGE("axcl_Memcpy failed, ret=%d", ret);
-                return ret;
+                ALOGE("axcl_Memcpy failed, ret=%d", rets[rankid]);
+                return rets[rankid];
             }
         }
         return 0;

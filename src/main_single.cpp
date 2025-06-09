@@ -8,6 +8,7 @@
 #include <axcl_rt_p2p.h>
 
 #include <cmath>
+#include <timer.hpp>
 
 float consine_similarity(const float *a, const float *b, int size)
 {
@@ -85,9 +86,9 @@ int main(int argc, char **argv)
 
     ax_runner_ax650 runner_ax650;
 
-    runner.init("/home/axera/ax-llm/build/qwen2.5_1.5B_tensor_parallel/models_tar/qwen2_p128_l0_together.tar", devices);
+    runner.init("decoding/qwen2_p1_r1_together.tar", devices);
 
-    runner_ax650.init("/home/axera/ax-llm/build/axmodel_qwen2.5_1.5b_chunked_nogptq_bf16/qwen2_p128_l0_together.axmodel", 0);
+    runner_ax650.init("axmodel_qwen2.5_1.5b_chunked_nogptq_bf16/qwen2_p128_l0_together.axmodel", 0);
 
     for (size_t i = 0; i < runner_ax650.get_num_inputs(); i++)
     {
@@ -107,6 +108,21 @@ int main(int argc, char **argv)
         for (int rankid = 0; rankid < devices.size(); rankid++)
         {
             auto input = runner.get_rank_input(rankid, i);
+
+            if (input.sName.find("K_cache") != std::string::npos)
+            {
+                axcl_Memset((void *)input.phyAddr, 0, input.nSize, 0);
+                printf("skip input name: %s, size: %d, data: %d\n", input.sName.c_str(), input.nSize, 0);
+                continue;
+            }
+
+            if (input.sName.find("V_cache") != std::string::npos)
+            {
+                axcl_Memset((void *)input.phyAddr, 0, input.nSize, 0);
+                printf("skip input name: %s, size: %d, data: %d\n", input.sName.c_str(), input.nSize, 0);
+                continue;
+            }
+
             std::vector<char> in_data;
             std::string path = "dump_tp/mingli/input/" + input.sName + ".bin";
             if (!read_file(path, in_data))
@@ -133,8 +149,19 @@ int main(int argc, char **argv)
                 runner_ax650.get_input("input").nSize, AXCL_MEMCPY_DEVICE_TO_DEVICE, runner.get_devid());
 
     printf("set input done\n");
-    runner.inference();
-    runner_ax650.inference();
+    timer t;
+    for (int i = 0; i < 10; i++)
+    {
+        t.start();
+        runner.inference();
+        t.stop();
+        printf("tp inference time: %0.2f ms\n", t.cost());
+
+        t.start();
+        runner_ax650.inference();
+        t.stop();
+        printf("inference time: %0.2f ms\n", t.cost());
+    }
 
     for (size_t i = 0; i < runner.get_num_outputs(); i++)
     {
@@ -176,12 +203,19 @@ int main(int argc, char **argv)
         unsigned short *buffer_out_fp16 = (unsigned short *)runner.get_rank_output(rankid, "output").pVirAddr;
         printf("rank-%d size: %d\n", rankid, runner.get_rank_output(rankid, "output").nSize);
         printf("(");
-        for (size_t i = 0; i < buffer_out_fp32.size() / 2; i++)
+        for (size_t i = 0; i < buffer_out_fp32.size(); i++)
         {
             buffer_out_fp32[i] = bfloat16(buffer_out_fp16[i]).fp32();
             printf("%f, ", buffer_out_fp32[i]);
         }
         printf(")\n");
+
+        FILE *fp = fopen(("rank" + std::to_string(rankid) + ".bin").c_str(), "wb");
+        if (fp)
+        {
+            fwrite(runner.get_rank_output(rankid, "output").pVirAddr, runner.get_rank_output(rankid, "output").nSize, 1, fp);
+            fclose(fp);
+        }
 
         float sim = consine_similarity(output_data_650.data(), buffer_out_fp32.data(), output_data_650.size());
         printf("rank %d similarity: %f\n", rankid, sim);

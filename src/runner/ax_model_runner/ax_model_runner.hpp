@@ -86,15 +86,15 @@ public:
         }
         if (map_input_tensors.find(name) == map_input_tensors.end())
         {
-            ALOGD("input tensor not found: %s, try to find a similar name", name.c_str());
-            for(auto &it : map_input_tensors)
-            {
-                if(it.first.find(name)!= std::string::npos)
-                {
-                    ALOGD("input tensor not found: %s, but found a similar name: %s", name.c_str(), it.first.c_str());
-                    return it.second;
-                }
-            }
+            // ALOGD("input tensor not found: %s, try to find a similar name", name.c_str());
+            // for(auto &it : map_input_tensors)
+            // {
+            //     if(it.first.find(name)!= std::string::npos)
+            //     {
+            //         ALOGD("input tensor not found: %s, but found a similar name: %s", name.c_str(), it.first.c_str());
+            //         return it.second;
+            //     }
+            // }
             throw std::runtime_error("input tensor not found: " + name);
         }
 
@@ -136,15 +136,15 @@ public:
         }
         if (map_output_tensors.find(name) == map_output_tensors.end())
         {
-            ALOGD("output tensor not found: %s, try to find a similar name", name.c_str());
-            for(auto &it : map_output_tensors)
-            {
-                if(it.first.find(name) != std::string::npos)
-                {
-                    ALOGD("output tensor not found: %s, but found a similar name: %s", name.c_str(), it.first.c_str());
-                    return it.second;
-                }
-            }
+            // ALOGD("output tensor not found: %s, try to find a similar name", name.c_str());
+            // for(auto &it : map_output_tensors)
+            // {
+            //     if(it.first.find(name) != std::string::npos)
+            //     {
+            //         ALOGD("output tensor not found: %s, but found a similar name: %s", name.c_str(), it.first.c_str());
+            //         return it.second;
+            //     }
+            // }
             throw std::runtime_error("output tensor not found: " + name);
         }
 
