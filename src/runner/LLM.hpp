@@ -20,19 +20,13 @@
 #include <axcl_rt_p2p.h>
 
 #define ENABLE_COST 1
-#define COST_INTERVAL 500
 #if ENABLE_COST
-#define COST(func)                                               \
-    do                                                           \
-    {                                                            \
-        static int _cost_counter = 0;                            \
-        _cost_counter++;                                         \
-        timer _timer;                                            \
-        func;                                                    \
-        if (_cost_counter % (COST_INTERVAL) == 0)                \
-        {                                                        \
-            printf("%s cost: %3.2f ms\n", #func, _timer.cost()); \
-        }                                                        \
+#define COST(func)                                           \
+    do                                                       \
+    {                                                        \
+        timer _timer;                                        \
+        func;                                                \
+        printf("%s cost: %3.2f ms\n", #func, _timer.cost()); \
     } while (0)
 #else
 #define COST(func) func
@@ -376,77 +370,51 @@ public:
 
                 auto &layer = llama_layers[m];
 
-                // axcl_Memcpy((void *)layer.layer.get_input("indices").phyAddr, &indices, sizeof(indices), AXCL_MEMCPY_HOST_TO_DEVICE, layer.layer.get_devid());
+                layer.layer.set_input("indices", &indices, sizeof(indices)); // 0.28 ms
 
-                layer.layer.set_input("indices", &indices, sizeof(indices));
+                layer.layer.set_input("mask", mask.data(), mask.size() * sizeof(unsigned short)); // 0.28 ms
 
-                layer.layer.set_input("mask", mask.data(), mask.size() * sizeof(unsigned short));
-
-                // axcl_Memcpy((void *)layer.layer.get_input("mask").phyAddr, mask.data(), mask.size() * sizeof(unsigned short), AXCL_MEMCPY_HOST_TO_DEVICE, layer.layer.get_devid());
-
-                layer.layer.inference();
-
-                // if (indices == 0 && m == 0)
-                // {
-                //     {
-                //         for (size_t i = 0; i < layer.layer.get_num_inputs(); i++)
-                //         {
-                //             auto in = layer.layer.get_input(i);
-                //             FILE *fp = fopen(("dump_tp/input/" + in.sName + ".bin").c_str(), "wb");
-                //             if (fp)
-                //             {
-                //                 axcl_Memcpy(in.pVirAddr, (void *)in.phyAddr, in.nSize, AXCL_MEMCPY_DEVICE_TO_HOST, layer.layer.get_devid());
-                //                 fwrite(in.pVirAddr, in.nSize, 1, fp);
-                //                 fclose(fp);
-                //             }
-                //         }
-                //     }
-                //     {
-                //         for (size_t i = 0; i < layer.layer.get_num_outputs(); i++)
-                //         {
-                //             auto out = layer.layer.get_output(i);
-                //             FILE *fp = fopen(("dump_tp/output/" + out.sName + ".bin").c_str(), "wb");
-                //             if (fp)
-                //             {
-                //                 axcl_Memcpy(out.pVirAddr, (void *)out.phyAddr, out.nSize, AXCL_MEMCPY_DEVICE_TO_HOST, layer.layer.get_devid());
-                //                 fwrite(out.pVirAddr, out.nSize, 1, fp);
-                //                 fclose(fp);
-                //             }
-                //         }
-                //     }
-                // }
-
+                layer.layer.inference(); // 1.45 ms
+                std::function<void()> kvcache_memcpy_func = [&]()
+                {
 #pragma omp parallel for
-                for (int rankid = 0; rankid < _attr.dev_ids.size(); rankid++)
+                    for (int rankid = 0; rankid < _attr.dev_ids.size(); rankid++)
+                    {
+                        unsigned short *input_k_cache_ptr = (unsigned short *)layer.layer.get_rank_input(rankid, "K_cache_rank" + std::to_string(rankid)).phyAddr;
+                        unsigned short *input_v_cache_ptr = (unsigned short *)layer.layer.get_rank_input(rankid, "V_cache_rank" + std::to_string(rankid)).phyAddr;
+
+                        axcl_Memcpy(input_k_cache_ptr + indices * _attr.kv_cache_size,
+                                    (void *)layer.layer.get_rank_output(rankid, "K_cache_out_rank" + std::to_string(rankid)).phyAddr,
+                                    sizeof(unsigned short) * _attr.kv_cache_size,
+                                    AXCL_MEMCPY_DEVICE_TO_DEVICE, layer.layer.get_devid(rankid));
+
+                        axcl_Memcpy(input_v_cache_ptr + indices * _attr.kv_cache_size,
+                                    (void *)layer.layer.get_rank_output(rankid, "V_cache_out_rank" + std::to_string(rankid)).phyAddr,
+                                    sizeof(unsigned short) * _attr.kv_cache_size,
+                                    AXCL_MEMCPY_DEVICE_TO_DEVICE, layer.layer.get_devid(rankid));
+                    }
+                };
+
+                kvcache_memcpy_func(); // 0.44 ms
+                std::function<void()> io_memcpy_func = [&]()
                 {
-                    unsigned short *input_k_cache_ptr = (unsigned short *)layer.layer.get_rank_input(rankid, "K_cache_rank" + std::to_string(rankid)).phyAddr;
-                    unsigned short *input_v_cache_ptr = (unsigned short *)layer.layer.get_rank_input(rankid, "V_cache_rank" + std::to_string(rankid)).phyAddr;
+                    if (m == _attr.axmodel_num - 1)
+                    {
+                        axcl_Memcpy((void *)layer.layer.get_output("output").pVirAddr,
+                                    (void *)layer.layer.get_output("output").phyAddr, layer.layer.get_output("output").nSize, AXCL_MEMCPY_DEVICE_TO_HOST, layer.layer.get_devid());
 
-                    axcl_Memcpy(input_k_cache_ptr + indices * _attr.kv_cache_size,
-                                (void *)layer.layer.get_rank_output(rankid, "K_cache_out_rank" + std::to_string(rankid)).phyAddr,
-                                sizeof(unsigned short) * _attr.kv_cache_size,
-                                AXCL_MEMCPY_DEVICE_TO_DEVICE, layer.layer.get_devid(rankid));
+                        llama_post.set_input(0, layer.layer.get_output("output").pVirAddr, layer.layer.get_output("output").nSize);
+                    }
+                    else if (m < _attr.axmodel_num - 1)
+                    {
+                        axcl_Memcpy((void *)layer.layer.get_output("output").pVirAddr,
+                                    (void *)layer.layer.get_output("output").phyAddr, layer.layer.get_output("output").nSize, AXCL_MEMCPY_DEVICE_TO_HOST, layer.layer.get_devid());
 
-                    axcl_Memcpy(input_v_cache_ptr + indices * _attr.kv_cache_size,
-                                (void *)layer.layer.get_rank_output(rankid, "V_cache_out_rank" + std::to_string(rankid)).phyAddr,
-                                sizeof(unsigned short) * _attr.kv_cache_size,
-                                AXCL_MEMCPY_DEVICE_TO_DEVICE, layer.layer.get_devid(rankid));
-                }
+                        llama_layers[m + 1].layer.set_input("input", layer.layer.get_output("output").pVirAddr, layer.layer.get_output("output").nSize);
+                    }
+                };
 
-                if (m == _attr.axmodel_num - 1)
-                {
-                    axcl_Memcpy((void *)layer.layer.get_output("output").pVirAddr,
-                                (void *)layer.layer.get_output("output").phyAddr, layer.layer.get_output("output").nSize, AXCL_MEMCPY_DEVICE_TO_HOST, layer.layer.get_devid());
-
-                    llama_post.set_input(0, layer.layer.get_output("output").pVirAddr, layer.layer.get_output("output").nSize);
-                }
-                else if (m < _attr.axmodel_num - 1)
-                {
-                    axcl_Memcpy((void *)layer.layer.get_output("output").pVirAddr,
-                                (void *)layer.layer.get_output("output").phyAddr, layer.layer.get_output("output").nSize, AXCL_MEMCPY_DEVICE_TO_HOST, layer.layer.get_devid());
-
-                    llama_layers[m + 1].layer.set_input("input", layer.layer.get_output("output").pVirAddr, layer.layer.get_output("output").nSize);
-                }
+                io_memcpy_func(); // 0.46 ms
             }
 
             mask[indices] = 0;
@@ -457,13 +425,18 @@ public:
             else
             {
                 // post process
-                llama_post.inference();
+                llama_post.inference(); // 6.6 ms
                 auto &output_post = llama_post.get_output("output");
                 unsigned short *post_out = (unsigned short *)output_post.pVirAddr;
-                axcl_Memcpy(post_out, (void *)output_post.phyAddr, output_post.nSize, AXCL_MEMCPY_DEVICE_TO_HOST, llama_post.get_devid());
+                axcl_Memcpy(post_out, (void *)output_post.phyAddr, output_post.nSize, AXCL_MEMCPY_DEVICE_TO_HOST, llama_post.get_devid()); // 1 ms
 
-                auto max_index = post_process(postprocess, post_out, _attr.tokens_embed_num, token_ids, nullptr);
-                next_token = max_index;
+                int max_index;
+                std::function<void()> post_process_func = [&]()
+                {
+                    max_index = post_process(postprocess, post_out, _attr.tokens_embed_num, token_ids, nullptr);
+                    next_token = max_index;
+                };
+                post_process_func(); // 0.4 ms
 
                 if (tokenizer->isEnd(max_index))
                 {

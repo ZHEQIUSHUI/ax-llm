@@ -54,23 +54,37 @@ public:
             }
         }
         tarFile.close();
-
+        m_runners.resize(rank_models.size());
+        std::vector<int> rets(rank_models.size());
+#pragma omp parallel for
         for (int i = 0; i < rank_models.size(); i++)
         {
             if (rank_models[i].size() == 0)
             {
                 ALOGE("model file %s not found", rank_filenames[i].c_str());
-                return -1;
+                rets[i] = -1;
             }
             std::shared_ptr<ax_runner_ax650> runner = std::make_shared<ax_runner_ax650>();
             int ret = runner->init(rank_models[i].data(), rank_models[i].size(), dev_ids[i]);
             if (ret != 0)
             {
                 ALOGE("%s init failed, ret=%d", rank_filenames[i].c_str(), ret);
-                return ret;
+                // return ret;
             }
-            ALOGD("%s init success, ret=%d", rank_filenames[i].c_str(), ret);
-            m_runners.push_back(runner);
+            else
+            {
+                ALOGD("%s init success, ret=%d", rank_filenames[i].c_str(), ret);
+                m_runners[i] = runner;
+            }
+            rets[i] = ret;
+        }
+        for (int i = 0; i < rets.size(); i++)
+        {
+            if (rets[i]!= 0)
+            {
+                ALOGE("%s init failed, ret=%d", rank_filenames[i].c_str(), rets[i]);
+                return rets[i];
+            }
         }
         return 0;
     }
