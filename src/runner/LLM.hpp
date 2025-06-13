@@ -19,7 +19,7 @@
 #include "utils/axcl_manager.h"
 #include <axcl_rt_p2p.h>
 
-#define ENABLE_COST 1
+#define ENABLE_COST 0
 #if ENABLE_COST
 #define COST(func)                                           \
     do                                                       \
@@ -355,11 +355,7 @@ public:
             }
 
             embed_selector.getByIndex(next_token, embed);
-
-            // axcl_Memcpy((void *)llama_layers[0].layer.get_input("input").phyAddr, embed.data(), llama_layers[0].layer.get_input("input").nSize, AXCL_MEMCPY_HOST_TO_DEVICE, llama_layers[0].layer.get_devid());
-            llama_layers[0].layer.set_input("input", embed.data(), llama_layers[0].layer.get_input("input").nSize);
-
-            // ALOGI("%f %f %f %f %f", bfloat16(embed[0]).fp32(), bfloat16(embed[1]).fp32(), bfloat16(embed[2]).fp32(), bfloat16(embed[3]).fp32(), bfloat16(embed[4]).fp32());
+            COST(llama_layers[0].layer.set_input("input", embed.data(), llama_layers[0].layer.get_input("input").nSize));
 
             for (int m = 0; m < _attr.axmodel_num; m++)
             {
@@ -370,11 +366,16 @@ public:
 
                 auto &layer = llama_layers[m];
 
-                layer.layer.set_input("indices", &indices, sizeof(indices)); // 0.28 ms
+                std::function<void()> indices_mask_memcpy_func = [&]()
+                {
+                    layer.layer.set_input("indices", &indices, sizeof(indices)); // 0.28 ms
 
-                layer.layer.set_input("mask", mask.data(), mask.size() * sizeof(unsigned short)); // 0.28 ms
+                    layer.layer.set_input("mask", mask.data(), mask.size() * sizeof(unsigned short)); // 0.28 ms
+                };
 
-                layer.layer.inference(); // 1.45 ms
+                COST(indices_mask_memcpy_func());
+
+                COST(layer.layer.inference()); // 1.45 ms
                 std::function<void()> kvcache_memcpy_func = [&]()
                 {
 #pragma omp parallel for
@@ -395,7 +396,7 @@ public:
                     }
                 };
 
-                kvcache_memcpy_func(); // 0.44 ms
+                COST(kvcache_memcpy_func()); // 0.44 ms
                 std::function<void()> io_memcpy_func = [&]()
                 {
                     if (m == _attr.axmodel_num - 1)
@@ -414,7 +415,7 @@ public:
                     }
                 };
 
-                io_memcpy_func(); // 0.46 ms
+                COST(io_memcpy_func()); // 0.46 ms
             }
 
             mask[indices] = 0;
@@ -425,10 +426,10 @@ public:
             else
             {
                 // post process
-                llama_post.inference(); // 6.6 ms
+                COST(llama_post.inference()); // 6.6 ms
                 auto &output_post = llama_post.get_output("output");
                 unsigned short *post_out = (unsigned short *)output_post.pVirAddr;
-                axcl_Memcpy(post_out, (void *)output_post.phyAddr, output_post.nSize, AXCL_MEMCPY_DEVICE_TO_HOST, llama_post.get_devid()); // 1 ms
+                COST(axcl_Memcpy(post_out, (void *)output_post.phyAddr, output_post.nSize, AXCL_MEMCPY_DEVICE_TO_HOST, llama_post.get_devid())); // 1 ms
 
                 int max_index;
                 std::function<void()> post_process_func = [&]()
@@ -436,7 +437,7 @@ public:
                     max_index = post_process(postprocess, post_out, _attr.tokens_embed_num, token_ids, nullptr);
                     next_token = max_index;
                 };
-                post_process_func(); // 0.4 ms
+                COST(post_process_func()); // 0.4 ms
 
                 if (tokenizer->isEnd(max_index))
                 {
