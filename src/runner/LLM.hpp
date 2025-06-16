@@ -19,15 +19,46 @@
 #include "utils/axcl_manager.h"
 #include <axcl_rt_p2p.h>
 
-#define ENABLE_COST 0
+#define ENABLE_COST 1
+
 #if ENABLE_COST
-#define COST(func)                                           \
-    do                                                       \
-    {                                                        \
-        timer _timer;                                        \
-        func;                                                \
-        printf("%s cost: %3.2f ms\n", #func, _timer.cost()); \
-    } while (0)
+
+static std::unordered_map<std::string, std::vector<double>> cost_records;
+void print_cost_statistics()
+{
+    for (const auto &pair : cost_records)
+    {
+        const std::string &func_name = pair.first;
+        std::vector<double> costs = pair.second;
+
+        double sum = 0.0;
+        double max_cost = costs[0];
+        double min_cost = costs[0];
+        double mid_cost = 0.0;
+        for (double cost : costs)
+        {
+            sum += cost;
+        }
+        max_cost = *std::max_element(costs.begin(), costs.end());
+        min_cost = *std::min_element(costs.begin(), costs.end());
+        std::sort(costs.begin(), costs.end());
+        mid_cost = costs[costs.size() / 2];
+
+        double avg_cost = sum / costs.size();
+
+        printf("avg: %5.2f ms, max: %5.2f ms, min: %5.2f ms, mid: %5.2f ms %s\n",
+               avg_cost, max_cost, min_cost, mid_cost, func_name.c_str());
+    }
+}
+
+#define COST(func)                           \
+    do                                       \
+    {                                        \
+        timer _timer;                        \
+        func;                                \
+        double cost = _timer.cost();         \
+        cost_records[#func].push_back(cost); \
+    } while (0);
 #else
 #define COST(func) func
 #endif
@@ -478,6 +509,10 @@ public:
         fflush(stdout);
         float t_cost_ms = t_cost.cost();
         ALOGN("hit eos,avg %.2f token/s\n", token_ids.size() / (t_cost_ms / 1000));
+
+#if ENABLE_COST
+        print_cost_statistics();
+#endif
 
         // 去掉 len_of_input 那部分
         token_ids.erase(token_ids.begin(), token_ids.begin() + len_of_input);
