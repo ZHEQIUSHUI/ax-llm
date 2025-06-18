@@ -54,6 +54,11 @@ public:
             }
         }
         tarFile.close();
+        if (rank_models.size() != dev_ids.size())
+        {
+            ALOGE("model file num %d not equal to dev_ids num %d", rank_models.size(), dev_ids.size());
+            return -1;
+        }
         m_runners.resize(rank_models.size());
         std::vector<int> rets(rank_models.size());
 #pragma omp parallel for
@@ -80,7 +85,7 @@ public:
         }
         for (int i = 0; i < rets.size(); i++)
         {
-            if (rets[i]!= 0)
+            if (rets[i] != 0)
             {
                 ALOGE("%s init failed, ret=%d", rank_filenames[i].c_str(), rets[i]);
                 return rets[i];
@@ -115,8 +120,7 @@ public:
     // Global (rank 0) input accessors
     int get_num_inputs() { return m_runners[0]->get_num_inputs(); }
     int get_num_outputs() { return m_runners[0]->get_num_outputs(); }
-    int get_num_input_groups() { return m_runners[0]->get_num_input_groups(); }
-    int get_num_output_groups() { return m_runners[0]->get_num_output_groups(); }
+    int get_num_groups() { return m_runners[0]->get_num_groups(); }
 
     const ax_runner_tensor_t &get_input(int idx) { return m_runners[0]->get_input(idx); }
     const ax_runner_tensor_t *get_inputs_ptr() { return m_runners[0]->get_inputs_ptr(); }

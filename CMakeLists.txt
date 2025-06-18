@@ -85,7 +85,7 @@ endfunction()
 
 build_exec(main src/main.cpp)
 build_exec(main_single src/main_single.cpp)
-# build_exec(main_qwen src/main_qwen.cpp)
+build_exec(main_single_prof src/main_single_prof.cpp)
 
 file(GLOB RUN_SCRIPT "${CMAKE_SOURCE_DIR}/scripts/*.py" "${CMAKE_SOURCE_DIR}/scripts/*.sh")
 install(FILES ${RUN_SCRIPT} DESTINATION bin/)
