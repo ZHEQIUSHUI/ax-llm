@@ -1,13 +1,14 @@
 #include "runner/ax_model_runner/ax_parallel_runner.hpp"
 #include <axcl_rt_memory.h>
 #include <axcl.h>
+#include <axcl_rt_p2p.h>
+
 #include "cmdline.hpp"
 #include "memory_utils.hpp"
 #include "bfloat16.hpp"
-#include <axcl_rt_p2p.h>
+#include "timer.hpp"
 
 #include <cmath>
-#include <timer.hpp>
 #include <unordered_map>
 
 static std::unordered_map<std::string, std::vector<double>> cost_records;
@@ -33,7 +34,7 @@ void print_cost_statistics()
 
         double avg_cost = sum / costs.size();
 
-        printf("total:%3d, avg: %5.2f ms, max: %5.2f ms, min: %5.2f ms, mid: %5.2f ms %s\n",
+        ALOGI("total:%3d, avg: %5.2f ms, max: %5.2f ms, min: %5.2f ms, mid: %5.2f ms %s\n",
                costs.size(), avg_cost, max_cost, min_cost, mid_cost, func_name.c_str());
     }
 }
@@ -193,13 +194,17 @@ int main(int argc, char **argv)
     {
         runner.inference();
     }
-
-    for (int i = 0; i < loop_num; i++)
+    for (size_t grpid = 0; grpid < runner.get_num_groups(); grpid++)
     {
-        COST(runner.inference());
+        for (int i = 0; i < loop_num; i++)
+        {
+            COST(runner.inference(grpid));
+        }
+        print_cost_statistics();
+        cost_records.clear();
     }
 
-    print_cost_statistics();
+    
 
     runner.deinit();
 
